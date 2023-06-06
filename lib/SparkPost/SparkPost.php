@@ -4,9 +4,7 @@ namespace SparkPost;
 
 use Http\Client\HttpClient;
 use Http\Client\HttpAsyncClient;
-use Http\Discovery\MessageFactoryDiscovery;
-use Http\Message\RequestFactory;
-use Psr\Http\Message\RequestInterface;
+use GuzzleHttp\Psr7\Request as Request;
 
 class SparkPost
 {
@@ -203,7 +201,7 @@ class SparkPost
      */
     public function buildRequestInstance($method, $url, $headers, $body)
     {
-        return $this->getMessageFactory()->createRequest($method, $url, $headers, $body);
+        return new Request($method, $url, $headers, $body);
     }
 
     /**
@@ -211,7 +209,7 @@ class SparkPost
      *
      * @param array $requestValues
      *
-     * @return RequestInterface
+     * @return GuzzleHttp\Psr7\Request - A Psr7 compliant request
      */
     public function buildRequest($method, $uri, $payload, $headers)
     {
@@ -336,27 +334,4 @@ class SparkPost
         $this->transmissions = new Transmission($this);
     }
 
-    /**
-     * @return RequestFactory
-     */
-    private function getMessageFactory()
-    {
-        if (!$this->messageFactory) {
-            $this->messageFactory = MessageFactoryDiscovery::find();
-        }
-
-        return $this->messageFactory;
-    }
-
-    /**
-     * @param RequestFactory $messageFactory
-     *
-     * @return SparkPost
-     */
-    public function setMessageFactory(RequestFactory $messageFactory)
-    {
-        $this->messageFactory = $messageFactory;
-
-        return $this;
-    }
 }
