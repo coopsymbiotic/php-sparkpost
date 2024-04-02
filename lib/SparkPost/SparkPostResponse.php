@@ -5,7 +5,7 @@ namespace SparkPost;
 use Psr\Http\Message\ResponseInterface as ResponseInterface;
 use Psr\Http\Message\StreamInterface as StreamInterface;
 
-class SparkPostResponse implements ResponseInterface
+class SparkPostResponse
 {
     /**
      * ResponseInterface to be wrapped by SparkPostResponse.
