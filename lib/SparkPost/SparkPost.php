@@ -274,10 +274,6 @@ class SparkPost
      */
     public function setHttpClient($httpClient)
     {
-        if (!($httpClient instanceof HttpAsyncClient || $httpClient instanceof HttpClient)) {
-            throw new \LogicException(sprintf('Parameter to SparkPost::setHttpClient must be instance of "%s" or "%s"', HttpClient::class, HttpAsyncClient::class));
-        }
-
         $this->httpClient = $httpClient;
 
         return $this;
