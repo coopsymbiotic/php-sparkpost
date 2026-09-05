@@ -4,137 +4,125 @@ namespace SparkPost\Test;
 
 use PHPUnit\Framework\TestCase;
 use SparkPost\SparkPostResponse;
-use Mockery;
 
 class SparkPostResponseTest extends TestCase
 {
-    /** @var Mockery\MockInterface|\Psr\Http\Message\ResponseInterface */
-    private $responseMock;
-    /** @var string */
-    private $returnValue;
+    /** @var SparkPostResponse */
+    private $response;
+
+    private $body = ['results' => ['id' => '123']];
 
     public function setUp(): void
     {
-        $this->returnValue = 'some_value_to_return';
-        $this->responseMock = Mockery::mock('Psr\Http\Message\ResponseInterface');
+        $this->response = new SparkPostResponse(
+            200,
+            ['Content-Type' => 'application/json', 'X-Multi' => ['a', 'b']],
+            json_encode($this->body),
+            ['some' => 'request'],
+            'OK',
+            '2'
+        );
+    }
+
+    public function testGetBody()
+    {
+        $this->assertEquals($this->body, $this->response->getBody());
+        $this->assertEquals(json_encode($this->body), $this->response->getRawBody());
+    }
+
+    public function testGetBodyWhenNotJson()
+    {
+        $response = new SparkPostResponse(502, [], '<html>Bad Gateway</html>');
+        $this->assertNull($response->getBody());
+        $this->assertEquals('<html>Bad Gateway</html>', $response->getRawBody());
     }
 
     public function testGetProtocolVersion()
     {
-        $this->responseMock->shouldReceive('getProtocolVersion')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->getProtocolVersion(), $sparkpostResponse->getProtocolVersion());
+        $this->assertEquals('2', $this->response->getProtocolVersion());
     }
 
     public function testWithProtocolVersion()
     {
-        $param = 'protocol version';
-
-        $this->responseMock->shouldReceive('withProtocolVersion')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->withProtocolVersion($param), $sparkpostResponse->withProtocolVersion($param));
+        $new = $this->response->withProtocolVersion('1.1');
+        $this->assertEquals('1.1', $new->getProtocolVersion());
+        $this->assertEquals('2', $this->response->getProtocolVersion());
     }
 
     public function testGetHeaders()
     {
-        $this->responseMock->shouldReceive('getHeaders')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->getHeaders(), $sparkpostResponse->getHeaders());
+        $this->assertEquals(['Content-Type' => ['application/json'], 'X-Multi' => ['a', 'b']], $this->response->getHeaders());
     }
 
-    public function testHasHeader()
+    public function testHasHeaderIsCaseInsensitive()
     {
-        $param = 'header';
-
-        $this->responseMock->shouldReceive('hasHeader')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->hasHeader($param), $sparkpostResponse->hasHeader($param));
+        $this->assertTrue($this->response->hasHeader('content-type'));
+        $this->assertTrue($this->response->hasHeader('CONTENT-TYPE'));
+        $this->assertFalse($this->response->hasHeader('X-Missing'));
     }
 
     public function testGetHeader()
     {
-        $param = 'header';
-
-        $this->responseMock->shouldReceive('getHeader')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->getHeader($param), $sparkpostResponse->getHeader($param));
+        $this->assertEquals(['application/json'], $this->response->getHeader('content-type'));
+        $this->assertEquals(['a', 'b'], $this->response->getHeader('x-multi'));
+        $this->assertEquals([], $this->response->getHeader('x-missing'));
     }
 
     public function testGetHeaderLine()
     {
-        $param = 'header';
-
-        $this->responseMock->shouldReceive('getHeaderLine')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->getHeaderLine($param), $sparkpostResponse->getHeaderLine($param));
+        $this->assertEquals('a, b', $this->response->getHeaderLine('X-Multi'));
+        $this->assertEquals('', $this->response->getHeaderLine('X-Missing'));
     }
 
     public function testWithHeader()
     {
-        $param = 'header';
-        $param2 = 'value';
-
-        $this->responseMock->shouldReceive('withHeader')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->withHeader($param, $param2), $sparkpostResponse->withHeader($param, $param2));
+        $new = $this->response->withHeader('x-multi', 'c');
+        $this->assertEquals(['c'], $new->getHeader('X-Multi'));
+        $this->assertEquals(['a', 'b'], $this->response->getHeader('X-Multi'));
     }
 
     public function testWithAddedHeader()
     {
-        $param = 'header';
-        $param2 = 'value';
-
-        $this->responseMock->shouldReceive('withAddedHeader')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->withAddedHeader($param, $param2), $sparkpostResponse->withAddedHeader($param, $param2));
+        $new = $this->response->withAddedHeader('x-multi', 'c');
+        $this->assertEquals(['a', 'b', 'c'], $new->getHeader('X-Multi'));
+        $this->assertEquals(['a', 'b'], $this->response->getHeader('X-Multi'));
     }
 
     public function testWithoutHeader()
     {
-        $param = 'header';
-
-        $this->responseMock->shouldReceive('withoutHeader')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->withoutHeader($param), $sparkpostResponse->withoutHeader($param));
+        $new = $this->response->withoutHeader('CONTENT-TYPE');
+        $this->assertFalse($new->hasHeader('Content-Type'));
+        $this->assertTrue($this->response->hasHeader('Content-Type'));
     }
 
     public function testGetRequest()
     {
-        $request = ['some' => 'request'];
-        $this->responseMock->shouldReceive('getRequest')->andReturn($request);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock, $request);
-        $this->assertEquals($sparkpostResponse->getRequest(), $request);
+        $this->assertEquals(['some' => 'request'], $this->response->getRequest());
+        $this->assertNull((new SparkPostResponse(200))->getRequest());
     }
 
     public function testWithBody()
     {
-        $param = Mockery::mock('Psr\Http\Message\StreamInterface');
-
-        $this->responseMock->shouldReceive('withBody')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->withBody($param), $sparkpostResponse->withBody($param));
+        $new = $this->response->withBody('{"results":"other"}');
+        $this->assertEquals(['results' => 'other'], $new->getBody());
+        $this->assertEquals($this->body, $this->response->getBody());
     }
 
     public function testGetStatusCode()
     {
-        $this->responseMock->shouldReceive('getStatusCode')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->getStatusCode(), $sparkpostResponse->getStatusCode());
+        $this->assertSame(200, $this->response->getStatusCode());
     }
 
     public function testWithStatus()
     {
-        $param = 'status';
-
-        $this->responseMock->shouldReceive('withStatus')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->withStatus($param), $sparkpostResponse->withStatus($param));
+        $new = $this->response->withStatus(404, 'Not Found');
+        $this->assertSame(404, $new->getStatusCode());
+        $this->assertEquals('Not Found', $new->getReasonPhrase());
+        $this->assertSame(200, $this->response->getStatusCode());
     }
 
     public function testGetReasonPhrase()
     {
-        $this->responseMock->shouldReceive('getReasonPhrase')->andReturn($this->returnValue);
-        $sparkpostResponse = new SparkPostResponse($this->responseMock);
-        $this->assertEquals($this->responseMock->getReasonPhrase(), $sparkpostResponse->getReasonPhrase());
+        $this->assertEquals('OK', $this->response->getReasonPhrase());
     }
 }

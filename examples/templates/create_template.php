@@ -5,13 +5,9 @@ namespace Examples\Templates;
 require dirname(__FILE__).'/../bootstrap.php';
 
 use SparkPost\SparkPost;
-use GuzzleHttp\Client;
-use Http\Adapter\Guzzle6\Client as GuzzleAdapter;
-
-$httpClient = new GuzzleAdapter(new Client());
 
 // In these examples, fetch API key from environment variable
-$sparky = new SparkPost($httpClient, ["key" => getenv('SPARKPOST_API_KEY')]);
+$sparky = new SparkPost(["key" => getenv('SPARKPOST_API_KEY')]);
 
 $template_name = "PHP example template";
 $template_id = "PHP-example-template";

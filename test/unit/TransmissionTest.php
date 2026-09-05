@@ -4,13 +4,16 @@ namespace SparkPost\Test;
 
 use PHPUnit\Framework\TestCase;
 use SparkPost\SparkPost;
-use Mockery;
 
 class TransmissionTest extends TestCase
 {
-    private $clientMock;
+    /** @var FakeHttpClient */
+    private $client;
+
     /** @var SparkPost */
     private $resource;
+
+    private $responseBody = ['results' => 'yay'];
 
     private $postTransmissionPayload = [
         'content' => [
@@ -45,24 +48,10 @@ class TransmissionTest extends TestCase
         'campaign_id' => 'thanksgiving',
     ];
 
-    /**
-     * (non-PHPdoc).
-     *
-     * @before
-     *
-     * @see PHPUnit_Framework_TestCase::setUp()
-     */
     public function setUp(): void
     {
-        //setup mock for the adapter
-        $this->clientMock = Mockery::mock('Http\Adapter\Guzzle6\Client');
-
-        $this->resource = new SparkPost($this->clientMock, ['key' => 'SPARKPOST_API_KEY', 'async' => false]);
-    }
-
-    public function tearDown(): void
-    {
-        Mockery::close();
+        $this->client = new FakeHttpClient();
+        $this->resource = new SparkPost($this->client, ['key' => 'SPARKPOST_API_KEY', 'async' => false]);
     }
 
     public function testInvalidEmailFormat()
@@ -73,73 +62,60 @@ class TransmissionTest extends TestCase
             'address' => 'invalid email format',
         ];
 
-        $response = $this->resource->transmissions->post($this->postTransmissionPayload);
+        $this->resource->transmissions->post($this->postTransmissionPayload);
     }
 
     public function testGet()
     {
-        $responseMock = Mockery::mock('Psr\Http\Message\ResponseInterface');
-        $responseBodyMock = Mockery::mock();
-
-        $responseBody = ['results' => 'yay'];
-
-        $this->clientMock->shouldReceive('sendRequest')->
-            once()->
-            with(Mockery::type('GuzzleHttp\Psr7\Request'))->
-            andReturn($responseMock);
-
-        $responseMock->shouldReceive('getStatusCode')->andReturn(200);
-        $responseMock->shouldReceive('getBody')->andReturn($responseBodyMock);
-        $responseBodyMock->shouldReceive('__toString')->andReturn(json_encode($responseBody));
+        $this->client->queue(200, $this->responseBody);
 
         $response = $this->resource->transmissions->get($this->getTransmissionPayload);
 
-        $this->assertEquals($responseBody, $response->getBody());
+        $this->assertEquals($this->responseBody, $response->getBody());
         $this->assertEquals(200, $response->getStatusCode());
+
+        $request = $this->client->requests[0][0];
+        $this->assertEquals('GET', $request['method']);
+        $this->assertEquals('https://api.sparkpost.com:443/api/v1/transmissions/?campaign_id=thanksgiving', $request['url']);
+    }
+
+    public function testGetWithUri()
+    {
+        $this->client->queue(200, $this->responseBody);
+
+        $this->resource->transmissions->get('some-id');
+
+        $this->assertEquals('https://api.sparkpost.com:443/api/v1/transmissions/some-id', $this->client->requests[0][0]['url']);
     }
 
     public function testPut()
     {
-        $responseMock = Mockery::mock('Psr\Http\Message\ResponseInterface');
-        $responseBodyMock = Mockery::mock();
-
-        $responseBody = ['results' => 'yay'];
-
-        $this->clientMock->shouldReceive('sendRequest')->
-            once()->
-            with(Mockery::type('GuzzleHttp\Psr7\Request'))->
-            andReturn($responseMock);
-
-        $responseMock->shouldReceive('getStatusCode')->andReturn(200);
-        $responseMock->shouldReceive('getBody')->andReturn($responseBodyMock);
-        $responseBodyMock->shouldReceive('__toString')->andReturn(json_encode($responseBody));
+        $this->client->queue(200, $this->responseBody);
 
         $response = $this->resource->transmissions->put($this->getTransmissionPayload);
 
-        $this->assertEquals($responseBody, $response->getBody());
+        $this->assertEquals($this->responseBody, $response->getBody());
         $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('PUT', $this->client->requests[0][0]['method']);
+        $this->assertEquals($this->getTransmissionPayload, json_decode($this->client->requests[0][0]['body'], true));
     }
 
     public function testPost()
     {
-        $responseMock = Mockery::mock('Psr\Http\Message\ResponseInterface');
-        $responseBodyMock = Mockery::mock();
-
-        $responseBody = ['results' => 'yay'];
-
-        $this->clientMock->shouldReceive('sendRequest')->
-            once()->
-            with(Mockery::type('GuzzleHttp\Psr7\Request'))->
-            andReturn($responseMock);
-
-        $responseMock->shouldReceive('getStatusCode')->andReturn(200);
-        $responseMock->shouldReceive('getBody')->andReturn($responseBodyMock);
-        $responseBodyMock->shouldReceive('__toString')->andReturn(json_encode($responseBody));
+        $this->client->queue(200, $this->responseBody);
 
         $response = $this->resource->transmissions->post($this->postTransmissionPayload);
 
-        $this->assertEquals($responseBody, $response->getBody());
+        $this->assertEquals($this->responseBody, $response->getBody());
         $this->assertEquals(200, $response->getStatusCode());
+
+        $request = $this->client->requests[0][0];
+        $this->assertEquals('POST', $request['method']);
+        $this->assertEquals('https://api.sparkpost.com:443/api/v1/transmissions/', $request['url']);
+        $sent = json_decode($request['body'], true);
+        $this->assertEquals($this->resource->transmissions->formatPayload($this->postTransmissionPayload), $sent);
+        $this->assertArrayNotHasKey('cc', $sent);
+        $this->assertArrayNotHasKey('bcc', $sent);
     }
 
     public function testPostWithRecipientList()
@@ -147,46 +123,25 @@ class TransmissionTest extends TestCase
         $postTransmissionPayload = $this->postTransmissionPayload;
         $postTransmissionPayload['recipients'] = ['list_id' => 'SOME_LIST_ID'];
 
-        $responseMock = Mockery::mock('Psr\Http\Message\ResponseInterface');
-        $responseBodyMock = Mockery::mock();
+        $this->client->queue(200, $this->responseBody);
 
-        $responseBody = ['results' => 'yay'];
+        $response = $this->resource->transmissions->post($postTransmissionPayload);
 
-        $this->clientMock->shouldReceive('sendRequest')->
-            once()->
-            with(Mockery::type('GuzzleHttp\Psr7\Request'))->
-            andReturn($responseMock);
-
-        $responseMock->shouldReceive('getStatusCode')->andReturn(200);
-        $responseMock->shouldReceive('getBody')->andReturn($responseBodyMock);
-        $responseBodyMock->shouldReceive('__toString')->andReturn(json_encode($responseBody));
-
-        $response = $this->resource->transmissions->post();
-
-        $this->assertEquals($responseBody, $response->getBody());
+        $this->assertEquals($this->responseBody, $response->getBody());
         $this->assertEquals(200, $response->getStatusCode());
+        // Recipient lists are sent untouched.
+        $this->assertEquals($postTransmissionPayload, json_decode($this->client->requests[0][0]['body'], true));
     }
 
     public function testDelete()
     {
-        $responseMock = Mockery::mock('Psr\Http\Message\ResponseInterface');
-        $responseBodyMock = Mockery::mock();
-
-        $responseBody = ['results' => 'yay'];
-
-        $this->clientMock->shouldReceive('sendRequest')->
-            once()->
-            with(Mockery::type('GuzzleHttp\Psr7\Request'))->
-            andReturn($responseMock);
-
-        $responseMock->shouldReceive('getStatusCode')->andReturn(200);
-        $responseMock->shouldReceive('getBody')->andReturn($responseBodyMock);
-        $responseBodyMock->shouldReceive('__toString')->andReturn(json_encode($responseBody));
+        $this->client->queue(200, $this->responseBody);
 
         $response = $this->resource->transmissions->delete($this->getTransmissionPayload);
 
-        $this->assertEquals($responseBody, $response->getBody());
+        $this->assertEquals($this->responseBody, $response->getBody());
         $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('DELETE', $this->client->requests[0][0]['method']);
     }
 
     public function testFormatPayload()

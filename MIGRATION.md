@@ -2,6 +2,33 @@
 
 This is a guide to help you make the switch when the SparkPost PHP library changes major versions.
 
+## Migrating from 2.x to 3.0
+
+### No more HTTP client to provide
+The library now uses PHP's `curl` extension directly. Remove `php-http/*` and `guzzlehttp/*` from your `composer.json` if you only installed them for this library, and drop the client from the constructor:
+
+#### 2.x
+```php
+use GuzzleHttp\Client;
+use Http\Adapter\Guzzle6\Client as GuzzleAdapter;
+
+$httpClient = new GuzzleAdapter(new Client());
+$sparky = new SparkPost($httpClient, ['key' => 'YOUR_API_KEY']);
+```
+
+#### 3.0
+```php
+$sparky = new SparkPost(['key' => 'YOUR_API_KEY']);
+```
+
+The 2.x form keeps working (the client argument is ignored), so this change can be made at your own pace.
+
+### Responses, promises and exceptions
+`SparkPostResponse`, `SparkPostPromise` and `SparkPostException` keep their public methods but no longer implement PSR-7 / HTTPlug interfaces. Code that type-hinted `Psr\Http\Message\ResponseInterface` or `Http\Promise\Promise` must use the SparkPost classes instead. `SparkPostException::getCode()` is `0` for connection level errors (see `getCurlErrorNumber()`).
+
+### Asynchronous requests
+`async` no longer depends on the client. Requests start immediately, at most `CurlClient::getMaxConcurrency()` at a time, and `wait()` or `SparkPost::waitAll()` collect the results.
+
 ## Migrating from 1.0 to 2.0
 
 ## Package name change

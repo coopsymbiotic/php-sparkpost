@@ -2,36 +2,74 @@
 
 namespace SparkPost;
 
-use Psr\Http\Message\ResponseInterface as ResponseInterface;
-use Psr\Http\Message\StreamInterface as StreamInterface;
-
+/**
+ * An HTTP response from the SparkPost API.
+ *
+ * Immutable value object. The accessor names follow PSR-7 so existing code
+ * written against the previous (PSR-7 backed) version keeps working.
+ */
 class SparkPostResponse
 {
     /**
-     * ResponseInterface to be wrapped by SparkPostResponse.
+     * @var int
      */
-    private $response;
+    private $statusCode;
 
     /**
-     * Array with the request values sent.
+     * @var string
+     */
+    private $reasonPhrase;
+
+    /**
+     * @var string
+     */
+    private $protocolVersion;
+
+    /**
+     * @var array header name => list of values, in the order received
+     */
+    private $headers = [];
+
+    /**
+     * @var array lowercased header name => original header name
+     */
+    private $headerNames = [];
+
+    /**
+     * @var string raw response body
+     */
+    private $body;
+
+    /**
+     * Array with the request values sent (debug mode only).
      */
     private $request;
 
     /**
-     * set the response to be wrapped.
-     *
-     * @param ResponseInterface $response
+     * @param int         $statusCode
+     * @param array       $headers         - header name => string|string[] value(s)
+     * @param string      $body            - raw body
+     * @param array|null  $request         - the request values sent (debug mode)
+     * @param string      $reasonPhrase
+     * @param string      $protocolVersion
      */
-    public function __construct(ResponseInterface $response, $request = null)
+    public function __construct($statusCode, array $headers = [], $body = '', $request = null, $reasonPhrase = '', $protocolVersion = '1.1')
     {
-        $this->response = $response;
+        $this->statusCode = (int) $statusCode;
+        $this->body = (string) $body;
         $this->request = $request;
+        $this->reasonPhrase = (string) $reasonPhrase;
+        $this->protocolVersion = (string) $protocolVersion;
+
+        foreach ($headers as $name => $values) {
+            $this->setHeader($name, $values);
+        }
     }
 
     /**
      * Returns the request values sent.
      *
-     * @return array $request
+     * @return array|null $request
      */
     public function getRequest()
     {
@@ -41,83 +79,145 @@ class SparkPostResponse
     /**
      * Returns the body.
      *
-     * @return array $body - the json decoded body from the http response
+     * @return array|null $body - the json decoded body from the http response
      */
     public function getBody()
     {
-        $body = $this->response->getBody();
-        $body_string = $body->__toString();
-
-        $json = json_decode($body_string, true);
-
-        return $json;
+        return json_decode($this->body, true);
     }
 
     /**
-     * pass these down to the response given in the constructor.
+     * Returns the raw, undecoded body.
+     *
+     * @return string
      */
+    public function getRawBody()
+    {
+        return $this->body;
+    }
+
     public function getProtocolVersion()
     {
-        return $this->response->getProtocolVersion();
+        return $this->protocolVersion;
     }
 
     public function withProtocolVersion($version)
     {
-        return $this->response->withProtocolVersion($version);
+        $new = clone $this;
+        $new->protocolVersion = (string) $version;
+
+        return $new;
     }
 
+    /**
+     * @return array header name => string[] values
+     */
     public function getHeaders()
     {
-        return $this->response->getHeaders();
+        return $this->headers;
     }
 
     public function hasHeader($name)
     {
-        return $this->response->hasHeader($name);
+        return isset($this->headerNames[strtolower($name)]);
     }
 
+    /**
+     * @return string[] values, empty array if the header is absent
+     */
     public function getHeader($name)
     {
-        return $this->response->getHeader($name);
+        $key = strtolower($name);
+        if (!isset($this->headerNames[$key])) {
+            return [];
+        }
+
+        return $this->headers[$this->headerNames[$key]];
     }
 
+    /**
+     * @return string comma separated values, empty string if the header is absent
+     */
     public function getHeaderLine($name)
     {
-        return $this->response->getHeaderLine($name);
+        return implode(', ', $this->getHeader($name));
     }
 
     public function withHeader($name, $value)
     {
-        return $this->response->withHeader($name, $value);
+        $new = clone $this;
+        $new->removeHeader($name);
+        $new->setHeader($name, $value);
+
+        return $new;
     }
 
     public function withAddedHeader($name, $value)
     {
-        return $this->response->withAddedHeader($name, $value);
+        $new = clone $this;
+        $new->setHeader($name, $value);
+
+        return $new;
     }
 
     public function withoutHeader($name)
     {
-        return $this->response->withoutHeader($name);
+        $new = clone $this;
+        $new->removeHeader($name);
+
+        return $new;
     }
 
-    public function withBody(StreamInterface $body)
+    /**
+     * @param string $body - raw body
+     */
+    public function withBody($body)
     {
-        return $this->response->withBody($body);
+        $new = clone $this;
+        $new->body = (string) $body;
+
+        return $new;
     }
 
     public function getStatusCode()
     {
-        return $this->response->getStatusCode();
+        return $this->statusCode;
     }
 
     public function withStatus($code, $reasonPhrase = '')
     {
-        return $this->response->withStatus($code, $reasonPhrase);
+        $new = clone $this;
+        $new->statusCode = (int) $code;
+        $new->reasonPhrase = (string) $reasonPhrase;
+
+        return $new;
     }
 
     public function getReasonPhrase()
     {
-        return $this->response->getReasonPhrase();
+        return $this->reasonPhrase;
+    }
+
+    private function setHeader($name, $values)
+    {
+        $key = strtolower($name);
+        if (isset($this->headerNames[$key])) {
+            $name = $this->headerNames[$key];
+        } else {
+            $this->headerNames[$key] = $name;
+            $this->headers[$name] = [];
+        }
+
+        foreach ((array) $values as $value) {
+            $this->headers[$name][] = (string) $value;
+        }
+    }
+
+    private function removeHeader($name)
+    {
+        $key = strtolower($name);
+        if (isset($this->headerNames[$key])) {
+            unset($this->headers[$this->headerNames[$key]], $this->headerNames[$key]);
+        }
     }
 }

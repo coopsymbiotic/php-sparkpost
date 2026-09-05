@@ -4,6 +4,19 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased][unreleased]
 
+## [3.0.0] - 2026-09-05
+### Changed
+- Replaced the HTTPlug/Guzzle transport with a built-in `curl` client (`SparkPost\CurlClient`). The library no longer has any composer dependency; it requires the `curl` and `json` PHP extensions.
+- `new SparkPost($options)` is now the constructor signature. `new SparkPost($httpClient, $options)` still works, the client argument is ignored.
+- Performance for bulk sending: one shared `curl_multi` handle per process (connection and TLS session reuse across `SparkPost` instances), HTTP/2 multiplexing, `Expect: 100-continue` disabled, compressed responses, TCP keep-alive, DNS caching, recycled curl handles.
+- Asynchronous requests are always available and are driven by `curl_multi` with a bounded number of requests in flight (`CurlClient::setMaxConcurrency()`, default 10). `SparkPost::waitAll()` waits for every pending request.
+- `retries` also covers connection level curl errors (could not connect, empty reply, send/receive errors), not only 5xx responses.
+- `SparkPostResponse` and `SparkPostPromise` no longer depend on PSR-7 / HTTPlug interfaces; their public methods are unchanged. `SparkPostResponse::getRawBody()` was added.
+- `SparkPostException`: added `getResponse()` and `getCurlErrorNumber()`. Transport errors have `getCode()` = `0`.
+- Query string values are now URL encoded (spaces sent as `%20`, as Guzzle already did on the wire).
+- New options: `timeout` (30s), `connect_timeout` (10s), `curl_options` (extra `CURLOPT_*` settings).
+- `setHttpClient()` accepts a `SparkPost\HttpClientInterface` (e.g. a fake client for tests).
+
 ## [2.3.0] - 2021-03-16
 - [#201](https://github.com/SparkPost/php-sparkpost/pull/201) Update examples, README
 - [#200](https://github.com/SparkPost/php-sparkpost/pull/200) PHP 8 support

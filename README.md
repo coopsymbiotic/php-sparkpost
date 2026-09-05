@@ -23,12 +23,7 @@ The recommended way to install the SparkPost PHP Library is through composer.
 curl -sS https://getcomposer.org/installer | php
 ```
 
-Sparkpost requires php-http client (see [Setting up a Request Adapter](#setting-up-a-request-adapter)). There are several [providers](https://packagist.org/providers/php-http/client-implementation) available. If you were using guzzle6 your install might look like this.
-
-```
-composer require php-http/guzzle6-adapter "^1.1"
-composer require guzzlehttp/guzzle "^6.0"
-```
+The library needs PHP 8.0 or later with the `curl` and `json` extensions. It has no other dependency.
 
 Next, run the Composer command to install the SparkPost PHP Library:
 
@@ -45,55 +40,26 @@ use SparkPost\SparkPost;
 
 **Note:** Without composer the costs outweigh the benefits of using the PHP client library. A simple function like the one in [issue #164](https://github.com/SparkPost/php-sparkpost/issues/164#issuecomment-289888237) wraps the SparkPost API and makes it easy to use the API without resolving the composer dependencies.
 
-## Running with IDEs
+## HTTP transport
 
-When running with `xdebug` under an IDE such as VS Code, you may see an exception is thrown in file `vendor/php-http/discovery/src/Strategy/PuliBetaStrategy.php`:
-
-```
-Exception has occurred.
-Http\Discovery\Exception\PuliUnavailableException: Puli Factory is not available
-```
-
-[This is usual](http://docs.php-http.org/en/latest/discovery.html#puli-factory-is-not-available). Puli is not required to use the library. You can resume running after the exception.
-
-You can prevent the exception, by setting the discovery strategies, prior to creating the adapter object:
-```php
-// Prevent annoying "Puli exception" during work with xdebug / IDE
-// See https://github.com/getsentry/sentry-php/issues/801
-\Http\Discovery\ClassDiscovery::setStrategies([
-        // \Http\Discovery\Strategy\PuliBetaStrategy::class, // Deliberately disabled
-        \Http\Discovery\Strategy\CommonClassesStrategy::class,
-        \Http\Discovery\Strategy\CommonPsr17ClassesStrategy::class,
-]);
-```
-
-## Setting up a Request Adapter
-
-Because of dependency collision, we have opted to use a request adapter rather than
-requiring a request library.  This means that your application will need to pass in
-a request adapter to the constructor of the SparkPost Library.  We use the [HTTPlug](https://github.com/php-http/httplug) in SparkPost. Please visit their repo for a list of supported [clients and adapters](http://docs.php-http.org/en/latest/clients.html).  If you don't currently use a request library, you will
-need to require one and create a client from it and pass it along. The example below uses the GuzzleHttp Client Library.
-
-A Client can be setup like so:
+The library talks to the API with PHP's `curl` extension directly, there is no HTTP client to install or configure.
 
 ```php
 <?php
 require 'vendor/autoload.php';
 
 use SparkPost\SparkPost;
-use GuzzleHttp\Client;
-use Http\Adapter\Guzzle6\Client as GuzzleAdapter;
 
-$httpClient = new GuzzleAdapter(new Client());
-$sparky = new SparkPost($httpClient, ['key'=>'YOUR_API_KEY']);
+$sparky = new SparkPost(['key' => 'YOUR_API_KEY']);
 ?>
 ```
 
+All `SparkPost` instances in a process share one `SparkPost\CurlClient`, so connections (TCP + TLS) are established once and reused for every request, HTTP/2 is used when the API offers it, and asynchronous requests are multiplexed. See [Sending in bulk](#sending-in-bulk) for details.
+
+The previous constructor signature, `new SparkPost($httpClient, $options)`, still works: the HTTPlug client passed as first argument is ignored and curl is used instead.
+
 ## Initialization
-#### new Sparkpost(httpClient, options)
-* `httpClient`
-    * Required: Yes
-    * HTTP client or adapter supported by HTTPlug
+#### new Sparkpost(options)
 * `options`
     * Required: Yes
     * Type: `String` or `Array`
@@ -122,17 +88,32 @@ $sparky = new SparkPost($httpClient, ['key'=>'YOUR_API_KEY']);
     * Required: No
     * Type: `Boolean`
     * Default: `true`
-    * `async` defines if the `request` function sends an asynchronous or synchronous request. If your client does not support async requests set this to `false`
+    * `async` defines if the `request` function returns a `SparkPostPromise` (the request is started immediately and runs in the background) or blocks and returns a `SparkPostResponse`
 * `options.retries`
     * Required: No
     * Type: `Number`
     * Default: `0`
-    * `retries` controls how many API call attempts the client makes after receiving a 5xx response
+    * `retries` controls how many API call attempts the client makes after receiving a 5xx response or a connection level error
 * `options.debug`
     * Required: No
     * Type: `Boolean`
     * Default: `false`
     * If `debug` is true, then all `SparkPostResponse` and `SparkPostException` instances will return any array of the request values through the function `getRequest`
+* `options.timeout`
+    * Required: No
+    * Type: `Number`
+    * Default: `30`
+    * Maximum time in seconds for a whole request. Exceeding it throws a `SparkPostException` with `getCurlErrorNumber()` = `CURLE_OPERATION_TIMEDOUT`
+* `options.connect_timeout`
+    * Required: No
+    * Type: `Number`
+    * Default: `10`
+    * Maximum time in seconds to establish a connection
+* `options.curl_options`
+    * Required: No
+    * Type: `Array`
+    * Default: `[]`
+    * Extra `CURLOPT_*` => value pairs applied to every request, e.g. `[CURLOPT_PROXY => 'proxy:3128']` or `[CURLOPT_CAINFO => '/path/to/ca.pem']`. They are applied last and override the library's own settings
 
 ## Methods
 ### request(method, uri [, payload [, headers]])
@@ -159,10 +140,14 @@ Sends a synchronous request to the SparkPost API and returns a `SparkPostRespons
 ### asyncRequest(method, uri [, payload [, headers]])
 Sends an asynchronous request to the SparkPost API and returns a `SparkPostPromise`
 
+### waitAll()
+Blocks until every asynchronous request started through the HTTP client has settled. Results are delivered to the promises' `then()` callbacks; nothing is thrown from `waitAll()` itself.
+
 ### setHttpClient(httpClient)
 * `httpClient`
-    *  Required: Yes
-    * HTTP client or adapter supported by HTTPlug
+    * Required: No
+    * Type: `SparkPost\HttpClientInterface`
+    * Replaces the transport. Pass `null` (the default) to use the shared `SparkPost\CurlClient`. Useful to plug in a fake client in tests, or a `new CurlClient($maxConcurrency)` with its own connection pool
 
 ### setOptions(options)
 * `options`
@@ -191,13 +176,10 @@ Sends an asynchronous request to the SparkPost API and returns a `SparkPostPromi
 require 'vendor/autoload.php';
 
 use SparkPost\SparkPost;
-use GuzzleHttp\Client;
-use Http\Adapter\Guzzle6\Client as GuzzleAdapter;
 
-$httpClient = new GuzzleAdapter(new Client());
 // Good practice to not have API key literals in code - set an environment variable instead
 // For simple example, use synchronous model
-$sparky = new SparkPost($httpClient, ['key' => getenv('SPARKPOST_API_KEY'), 'async' => false]);
+$sparky = new SparkPost(['key' => getenv('SPARKPOST_API_KEY'), 'async' => false]);
 
 try {
     $response = $sparky->transmissions->post([
@@ -273,11 +255,8 @@ We provide a base request function to access any of our API resources.
 require 'vendor/autoload.php';
 
 use SparkPost\SparkPost;
-use GuzzleHttp\Client;
-use Http\Adapter\Guzzle6\Client as GuzzleAdapter;
 
-$httpClient = new GuzzleAdapter(new Client());
-$sparky = new SparkPost($httpClient, [
+$sparky = new SparkPost([
     'key' => getenv('SPARKPOST_API_KEY'),
     'async' => false]);
 
@@ -347,22 +326,52 @@ $promise->then(
 
 echo "I will print out before the promise is fulfilled";
 
-// You can combine multiple promises using \GuzzleHttp\Promise\all() and other functions from the library.
+// Wait for this promise, or for every pending request with $sparky->waitAll().
 $promise->wait();
 ```
 
+## Sending in bulk
+The transport is built for sending very large numbers of small requests (one transmission per email) to the same host:
+
+* One `curl_multi` handle per process owns the connection cache. Every `SparkPost` instance uses it, so creating a new instance per email still reuses the same TCP/TLS connection.
+* HTTP/2 is negotiated with the API, so concurrent requests are multiplexed on one connection.
+* `Expect: 100-continue` is disabled, responses are accepted compressed, TCP keep-alive and `TCP_NODELAY` are on, and DNS answers are cached.
+* Retries (`retries` option) cover 5xx responses and connection level errors such as a keep-alive connection closed by the server.
+
+Synchronous requests already benefit from all of this. To overlap network latency, send asynchronously and let the client keep several requests in flight:
+
+```php
+$sparky = new SparkPost(['key' => getenv('SPARKPOST_API_KEY'), 'retries' => 2]);
+// How many requests to keep in flight (default 10). Above this, the next
+// call blocks until a slot frees up, so memory stays bounded.
+$sparky->getHttpClient()->setMaxConcurrency(20);
+
+foreach ($emails as $id => $email) {
+    $sparky->transmissions->post($email)->then(
+        function ($response) use ($id) { /* record $response->getBody()['results']['id'] */ },
+        function ($exception) use ($id) { /* log $exception->getCode(), $exception->getBody() */ }
+    );
+}
+
+$sparky->waitAll();
+```
+
 ## Handling Exceptions
-An exception will be thrown in two cases: there is a problem with the request or  the server returns a status code of `400` or higher.
+An exception will be thrown in two cases: the request could not be completed (connection failure, timeout, ...) or the server returns a status code of `400` or higher.
 
 ### SparkPostException
 * **getCode()**
-    * Returns the response status code of `400` or higher
+    * Returns the response status code of `400` or higher, or `0` when the request could not be completed
 * **getMessage()**
     * Returns the exception message
 * **getBody()**
     * If there is a response body it returns it as an `Array`. Otherwise it returns `null`.
 * **getRequest()**
     * Returns an array with the request values `method`, `url`, `headers`, `body` when `debug` is `true`
+* **getResponse()**
+    * Returns the `SparkPostResponse` for status code errors, `null` otherwise
+* **getCurlErrorNumber()**
+    * Returns the `CURLE_*` error code when the request could not be completed, `0` otherwise
 
 
 ### Contributing

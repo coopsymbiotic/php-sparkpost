@@ -2,26 +2,17 @@
 
 namespace SparkPost;
 
-use Http\Client\HttpClient;
-use Http\Client\HttpAsyncClient;
-use GuzzleHttp\Psr7\Request as Request;
-
 class SparkPost
 {
     /**
      * @var string Library version, used for setting User-Agent
      */
-    private $version = '2.3.0';
+    private $version = '3.0.0';
 
     /**
-     * @var HttpClient|HttpAsyncClient used to make requests
+     * @var HttpClientInterface used to make requests
      */
     private $httpClient;
-
-    /**
-     * @var RequestFactory
-     */
-    private $messageFactory;
 
     /**
      * @var array Options for requests
@@ -39,7 +30,13 @@ class SparkPost
         'version' => 'v1',
         'async' => true,
         'debug' => false,
-        'retries' => 0
+        'retries' => 0,
+        // seconds allowed for the whole request
+        'timeout' => CurlClient::DEFAULT_TIMEOUT,
+        // seconds allowed to establish a connection
+        'connect_timeout' => CurlClient::DEFAULT_CONNECT_TIMEOUT,
+        // extra CURLOPT_* => value pairs applied to every request (proxy, CA bundle, ...)
+        'curl_options' => [],
     ];
 
     /**
@@ -50,12 +47,26 @@ class SparkPost
     /**
      * Sets up the SparkPost instance.
      *
-     * @param HttpClient $httpClient - An httplug client or adapter
-     * @param array      $options    - An array to overide default options or a string to be used as an API key
+     * Accepts either:
+     *   new SparkPost($options)
+     *   new SparkPost($httpClient, $options)   // previous signature
+     *
+     * @param array|string|HttpClientInterface|object $options - an array of options, a string API key,
+     *                                                           or an HTTP client (previous signature)
+     * @param array|string|null                       $legacyOptions - options when a client is passed first
      */
-    public function __construct($httpClient, array $options)
+    public function __construct($options, $legacyOptions = null)
     {
-        $this->setOptions($options);
+        $httpClient = null;
+        if (is_object($options)) {
+            // Previous signature: new SparkPost($httpClient, $options). Any
+            // client that is not one of ours (e.g. an HTTPlug adapter) is
+            // ignored and curl is used instead.
+            $httpClient = $options;
+            $options = $legacyOptions;
+        }
+
+        $this->setOptions($options === null ? [] : $options);
         $this->setHttpClient($httpClient);
         $this->setupEndpoints();
     }
@@ -93,34 +104,15 @@ class SparkPost
      */
     public function syncRequest($method = 'GET', $uri = '', $payload = [], $headers = [])
     {
-        $requestValues = $this->buildRequestValues($method, $uri, $payload, $headers);
-        $request = call_user_func_array(array($this, 'buildRequestInstance'), $requestValues);
-
-        $retries = $this->options['retries'];
-        try {
-            if ($retries > 0) {
-              $resp = $this->syncReqWithRetry($request, $retries);
-            } else {
-              $resp = $this->httpClient->sendRequest($request);
-            }
-            return new SparkPostResponse($resp, $this->ifDebug($requestValues));
-        } catch (\Exception $exception) {
-            throw new SparkPostException($exception, $this->ifDebug($requestValues));
-        }
-    }
-
-    private function syncReqWithRetry($request, $retries)
-    {
-        $resp = $this->httpClient->sendRequest($request);
-        $status = $resp->getStatusCode();
-        if ($status >= 500 && $status <= 599 && $retries > 0) {
-          return $this->syncReqWithRetry($request, $retries-1);
-        }
-        return $resp;
+        return $this->asyncRequest($method, $uri, $payload, $headers)->wait();
     }
 
     /**
      * Sends async request to SparkPost API.
+     *
+     * The request starts immediately. Call wait() on the returned promise (or
+     * waitAll() on this object) to get the result. The number of requests in
+     * flight at once is bounded by the client (see CurlClient::setMaxConcurrency).
      *
      * @param string $method
      * @param string $uri
@@ -131,30 +123,20 @@ class SparkPost
      */
     public function asyncRequest($method = 'GET', $uri = '', $payload = [], $headers = [])
     {
-        if ($this->httpClient instanceof HttpAsyncClient) {
-            $requestValues = $this->buildRequestValues($method, $uri, $payload, $headers);
-            $request = call_user_func_array(array($this, 'buildRequestInstance'), $requestValues);
+        $requestValues = $this->buildRequestValues($method, $uri, $payload, $headers);
 
-            $retries = $this->options['retries'];
-            if ($retries > 0) {
-                return new SparkPostPromise($this->asyncReqWithRetry($request, $retries), $this->ifDebug($requestValues));
-            } else {
-                return new SparkPostPromise($this->httpClient->sendAsyncRequest($request), $this->ifDebug($requestValues));
-            }
-        } else {
-            throw new \Exception('Your http client does not support asynchronous requests. Please use a different client or use synchronous requests.');
-        }
+        return $this->httpClient->send($requestValues, $this->getTransferOptions(), $this->ifDebug($requestValues));
     }
 
-    private function asyncReqWithRetry($request, $retries)
+    /**
+     * Blocks until every request started through the HTTP client has settled.
+     *
+     * Rejections are delivered to the promises' then() callbacks (or to wait()),
+     * they are not thrown from here.
+     */
+    public function waitAll()
     {
-        return $this->httpClient->sendAsyncRequest($request)->then(function($response) use ($request, $retries) {
-            $status = $response->getStatusCode();
-            if ($status >= 500 && $status <= 599 && $retries > 0) {
-                return $this->asyncReqWithRetry($request, $retries-1);
-            }
-            return $response;
-        });
+        $this->httpClient->waitAll();
     }
 
     /**
@@ -173,17 +155,15 @@ class SparkPost
 
         if ($method === 'GET') {
             $params = $payload;
-            $body = [];
+            $body = null;
         } else {
             $params = [];
-            $body = $payload;
+            $body = json_encode($payload);
         }
 
         $url = $this->getUrl($uri, $params);
         $headers = $this->getHttpHeaders($headers);
 
-        // old form-feed workaround now removed
-        $body = json_encode($body);
         return [
             'method' => $method,
             'url' => $url,
@@ -193,28 +173,13 @@ class SparkPost
     }
 
     /**
-     * Build RequestInterface from given params.
+     * Builds the request values from given params.
      *
-     * @param array $requestValues
-     *
-     * @return RequestInterface
-     */
-    public function buildRequestInstance($method, $url, $headers, $body)
-    {
-        return new Request($method, $url, $headers, $body);
-    }
-
-    /**
-     * Build RequestInterface from given params.
-     *
-     * @param array $requestValues
-     *
-     * @return GuzzleHttp\Psr7\Request - A Psr7 compliant request
+     * @return array - see buildRequestValues()
      */
     public function buildRequest($method, $uri, $payload, $headers)
     {
-        $requestValues = $this->buildRequestValues($method, $uri, $payload, $headers);
-        return call_user_func_array(array($this, 'buildRequestInstance'), $requestValues);
+        return $this->buildRequestValues($method, $uri, $payload, $headers);
     }
 
     /**
@@ -253,11 +218,12 @@ class SparkPost
 
         $paramsArray = [];
         foreach ($params as $key => $value) {
-            if (is_array($value)) {
-                $value = implode(',', $value);
+            if (!is_array($value)) {
+                $value = [$value];
             }
+            $value = implode(',', array_map('rawurlencode', $value));
 
-            array_push($paramsArray, $key.'='.$value);
+            array_push($paramsArray, rawurlencode($key).'='.$value);
         }
 
         $paramsString = implode('&', $paramsArray);
@@ -266,23 +232,40 @@ class SparkPost
     }
 
     /**
-     * Sets $httpClient to be used for request.
+     * Sets the HTTP client used for requests.
      *
-     * @param HttpClient|HttpAsyncClient $httpClient - the client to be used for request
+     * Passing null (or any object that is not an HttpClientInterface, such as
+     * an HTTPlug adapter from the previous version of this library) selects
+     * the process-wide curl client, which shares connections between all
+     * SparkPost instances.
+     *
+     * @param HttpClientInterface|object|null $httpClient
      *
      * @return SparkPost
      */
-    public function setHttpClient($httpClient)
+    public function setHttpClient($httpClient = null)
     {
+        if (!$httpClient instanceof HttpClientInterface) {
+            $httpClient = CurlClient::shared();
+        }
+
         $this->httpClient = $httpClient;
 
         return $this;
     }
 
     /**
+     * @return HttpClientInterface
+     */
+    public function getHttpClient()
+    {
+        return $this->httpClient;
+    }
+
+    /**
      * Sets the options from the param and defaults for the SparkPost object.
      *
-     * @param array $options - either an string API key or an array of options
+     * @param array|string $options - either an string API key or an array of options
      *
      * @return SparkPost
      */
@@ -311,6 +294,29 @@ class SparkPost
     }
 
     /**
+     * @return array the current options
+     */
+    public function getOptions()
+    {
+        return $this->options;
+    }
+
+    /**
+     * Options handed to the HTTP client for each transfer.
+     *
+     * @return array
+     */
+    private function getTransferOptions()
+    {
+        return [
+            'retries' => $this->options['retries'],
+            'timeout' => $this->options['timeout'],
+            'connect_timeout' => $this->options['connect_timeout'],
+            'curl_options' => $this->options['curl_options'],
+        ];
+    }
+
+    /**
      * Returns the given value if debugging, an empty instance otherwise.
      *
      * @param any $param
@@ -329,5 +335,4 @@ class SparkPost
     {
         $this->transmissions = new Transmission($this);
     }
-
 }
